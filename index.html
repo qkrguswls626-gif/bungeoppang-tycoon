@@ -264,7 +264,7 @@ if (!canVibrate) {
   iosHaptic.appendChild(sw);
   document.body.appendChild(iosHaptic);
 }
-function haptic(ms = 10) {
+function haptic(ms = 35) {
   if (!touchInput) return;
   try {
     if (canVibrate) navigator.vibrate(ms);
