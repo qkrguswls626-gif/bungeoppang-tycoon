@@ -3,7 +3,9 @@
 옛날 피처폰 감성의 도트 붕어빵 장사 웹게임입니다. `index.html` 하나로 동작하며, 외부 라이브러리나 이미지 파일을 쓰지 않습니다.
 
 ## 실행
-`index.html`을 브라우저로 열면 됩니다.
+- 웹(모바일 포함): https://qkrguswls626-gif.github.io/bungeoppang-tycoon/
+- 로컬: `index.html`을 브라우저로 열면 됩니다.
+- 휴대폰에서 버튼을 누르면 약한 햅틱 진동이 옵니다. (안드로이드: 진동 API, iOS 18 이상 Safari: 시스템 햅틱)
 
 ## 조작
 | 동작 | PC | 모바일 |

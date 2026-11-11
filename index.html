@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="theme-color" content="#140f18">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="붕어빵 타이쿤">
 <title>붕어빵 타이쿤</title>
 <style>
   html, body {
@@ -246,6 +250,28 @@ function beep(freq, dur = 0.06, vol = 0.07) {
   o.start(t); o.stop(t + dur + 0.02);
 }
 
+// ---------------------------------------------------------------- 햅틱 (약한 진동)
+// 안드로이드 등: navigator.vibrate / iOS Safari(18+): 숨긴 switch 체크박스를 눌러 시스템 햅틱 발생
+let touchInput = false;   // 마지막 입력이 터치였는지 (키보드·마우스면 진동 안 함)
+const canVibrate = typeof navigator.vibrate === 'function';
+let iosHaptic = null;
+if (!canVibrate) {
+  iosHaptic = document.createElement('label');
+  iosHaptic.setAttribute('aria-hidden', 'true');
+  iosHaptic.style.display = 'none';
+  const sw = document.createElement('input');
+  sw.type = 'checkbox'; sw.setAttribute('switch', '');
+  iosHaptic.appendChild(sw);
+  document.body.appendChild(iosHaptic);
+}
+function haptic(ms = 10) {
+  if (!touchInput) return;
+  try {
+    if (canVibrate) navigator.vibrate(ms);
+    else if (iosHaptic) iosHaptic.click();
+  } catch (e) { /* 지원 안 하면 무시 */ }
+}
+
 // ---------------------------------------------------------------- 저장
 const SAVE_KEY = 'bungeoppang_tycoon_save_v1';
 const DEFAULT_SAVE = { day: 1, money: 0, fire: 0, molds: 4, cream: false, total: 0 };
@@ -314,6 +340,7 @@ function cellCenter(i) { const [x, y] = cellPos(i); return [x + CELL_W / 2, y + 
 function pressCell(i) {
   if (!G || scene !== 'play') return;
   G.press[i] = 0.12;
+  haptic();
   const [cx, cy] = cellCenter(i);
   if (i >= save.molds) { beep(120, 0.08); popup(cx, cy, '잠김', '#aaa'); return; }
   const c = G.cells[i];
@@ -342,6 +369,7 @@ function pressCell(i) {
 function toggleFill() {
   if (!G || scene !== 'play') return;
   G.togglePress = 0.12;
+  haptic();
   if (!save.cream) { beep(150, 0.08); popup(120, 286, '슈크림은 상점에서!', '#ffe070'); return; }
   G.fill = G.fill === 'red' ? 'cream' : 'red';
   beep(G.fill === 'red' ? 600 : 750, 0.05);
@@ -446,6 +474,7 @@ function finishDay() {
 }
 
 function buy(n) {
+  haptic();
   if (n === 4) {
     if (!resetArmed) { resetArmed = true; shopMsg = { s: '한 번 더 누르면 기록 삭제!', t: 2.5, c: '#ff6060' }; beep(220, 0.1); return; }
     try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* 무시 */ }
@@ -473,11 +502,12 @@ function maxed() { shopMsg = { s: '이미 최고 단계예요', t: 1.5, c: '#ffe
 
 // ---------------------------------------------------------------- 입력
 function anyKey() {
+  if (scene === 'title' || (scene === 'intro' && sceneT > 0.3) || (scene === 'result' && sceneT > 0.8)) haptic();
   if (scene === 'title') { beep(880, 0.08); go('intro'); }
   else if (scene === 'intro' && sceneT > 0.3) { beep(988, 0.08); startDay(); go('play'); }
   else if (scene === 'result' && sceneT > 0.8) { beep(880, 0.06); resetArmed = false; shopMsg.t = 0; go('shop'); }
 }
-function nextDay() { beep(988, 0.08); resetArmed = false; go('intro'); }
+function nextDay() { haptic(); beep(988, 0.08); resetArmed = false; go('intro'); }
 
 function onKey(e) {
   const k = e.key;
@@ -524,14 +554,17 @@ function onTap(x, y) {
   anyKey();
 }
 
-addEventListener('keydown', e => { if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return; audioInit(); onKey(e); });
+addEventListener('keydown', e => { if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return; touchInput = false; audioInit(); onKey(e); });
 addEventListener('pointerdown', e => {
   if (e.button !== undefined && e.button > 0) return;
   e.preventDefault();
+  touchInput = e.pointerType === 'touch' || e.pointerType === 'pen';
   audioInit();
   const r = cv.getBoundingClientRect();
   onTap((e.clientX - r.left) * W / r.width, (e.clientY - r.top) * H / r.height);
 }, { passive: false });
+addEventListener('pointerup', audioInit);
+addEventListener('touchend', audioInit);
 addEventListener('contextmenu', e => e.preventDefault());
 
 // ---------------------------------------------------------------- 그리기: 공통
