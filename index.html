@@ -1,0 +1,902 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#140f18">
+<title>붕어빵 타이쿤</title>
+<style>
+  html, body {
+    margin: 0; height: 100%; background: #140f18; overflow: hidden;
+    touch-action: none; -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
+  }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas {
+    display: block;
+    image-rendering: crisp-edges;
+    image-rendering: pixelated;
+    outline: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="c" width="240" height="320"></canvas>
+<script>
+'use strict';
+// =====================================================================
+//  붕어빵 타이쿤 - 피처폰 감성 도트 게임 (240x320)
+// =====================================================================
+const W = 240, H = 320;
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+// ---------------------------------------------------------------- 화면 맞춤 (정수배)
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  const s = Math.max(1, Math.floor(Math.min(innerWidth * dpr / W, innerHeight * dpr / H)));
+  cv.style.width = (W * s / dpr) + 'px';
+  cv.style.height = (H * s / dpr) + 'px';
+}
+addEventListener('resize', resize);
+resize();
+
+// ---------------------------------------------------------------- 유틸
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const rnd = (a, b) => a + Math.random() * (b - a);
+const rndi = (a, b) => Math.floor(rnd(a, b + 1));
+const pick = a => a[Math.floor(Math.random() * a.length)];
+const won = n => n.toLocaleString('ko-KR') + '원';
+function hex(c) {
+  c = c.replace('#', '');
+  if (c.length === 3) c = c[0] + c[0] + c[1] + c[1] + c[2] + c[2];
+  return [parseInt(c.substr(0, 2), 16), parseInt(c.substr(2, 2), 16), parseInt(c.substr(4, 2), 16)];
+}
+const toHex = a => '#' + a.map(v => clamp(Math.round(v), 0, 255).toString(16).padStart(2, '0')).join('');
+function mix(a, b, t) { const A = hex(a), B = hex(b); return toHex(A.map((v, i) => v + (B[i] - v) * t)); }
+function shade(c, f) { return toHex(hex(c).map(v => v * f)); }
+
+function rect(x, y, w, h, c) { ctx.fillStyle = c; ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h)); }
+// 모서리가 깎인 도트 상자
+function box(x, y, w, h, fill, border) {
+  rect(x + 1, y, w - 2, h, border);
+  rect(x, y + 1, w, h - 2, border);
+  rect(x + 1, y + 1, w - 2, h - 2, fill);
+}
+
+// ---------------------------------------------------------------- 도트 글꼴 (알파 임계값으로 안티앨리어싱 제거)
+const FONT = '"DungGeunMo","Galmuri11","Galmuri9","굴림","Gulim","돋움","Dotum","AppleGothic","Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR","Noto Sans CJK KR","WenQuanYi Zen Hei Sharp",sans-serif';
+const tcache = new Map();
+function tsprite(s, col, size) {
+  const k = size + '|' + col + '|' + s;
+  let c = tcache.get(k);
+  if (c) return c;
+  if (tcache.size > 600) tcache.clear();
+  c = document.createElement('canvas');
+  const g = c.getContext('2d');
+  const f = size + 'px ' + FONT;
+  g.font = f;
+  const w = Math.max(1, Math.ceil(g.measureText(s).width) + 2), h = size + 3;
+  c.width = w; c.height = h;
+  g.font = f; g.textBaseline = 'top'; g.fillStyle = '#fff';
+  g.fillText(s, 1, 1);
+  const im = g.getImageData(0, 0, w, h), d = im.data, [r, gg, b] = hex(col);
+  for (let i = 0; i < d.length; i += 4) {
+    const on = d[i + 3] > 92;
+    d[i] = r; d[i + 1] = gg; d[i + 2] = b; d[i + 3] = on ? 255 : 0;
+  }
+  g.putImageData(im, 0, 0);
+  tcache.set(k, c);
+  return c;
+}
+// o: {size, scale, align:'left'|'center'|'right', shadow:color, outline:color}
+function text(s, x, y, col = '#fff', o = {}) {
+  s = String(s);
+  const size = o.size || 12, sc = o.scale || 1;
+  const sp = tsprite(s, col, size);
+  const w = sp.width * sc, h = sp.height * sc;
+  if (o.align === 'center') x -= w / 2; else if (o.align === 'right') x -= w;
+  x = Math.round(x); y = Math.round(y);
+  if (o.outline) {
+    const ol = tsprite(s, o.outline, size);
+    for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1], [1, 1]]) ctx.drawImage(ol, x + dx * sc, y + dy * sc, w, h);
+  } else if (o.shadow) {
+    ctx.drawImage(tsprite(s, o.shadow, size), x + sc, y + sc, w, h);
+  }
+  ctx.drawImage(sp, x, y, w, h);
+  return w;
+}
+const textW = (s, size = 12) => tsprite(String(s), '#ffffff', size).width;
+
+// ---------------------------------------------------------------- 도트 스프라이트: 붕어빵
+const FISH = [
+  '.......oooooooooo..oo...',
+  '.....oobbbbbbbbbbooobo..',
+  '...oobbbbbbbbbbbbbbobbo.',
+  '..obebbbsbbbsbbbsbbbbbo.',
+  '.obbbbbsbbbsbbbsbbbbbo..',
+  'obbbbbbsbbbsbbbsbbbbo...',
+  '.obbbbbsbbbsbbbsbbbbbo..',
+  '..obbbbbsbbbsbbbsbbbbbo.',
+  '...oobbbbbbbbbbbbbbobbo.',
+  '.....oobbbbbbbbbbooobo..',
+  '.......oooooooooo..oo...',
+];
+const FW = 24, FH = 11;
+const DONE_STOPS = [[0, '#f6e8b8'], [0.6, '#f0d488'], [1, '#e8a848'], [1.5, '#c27232'], [2, '#3a2620']];
+function doneColor(p) {
+  p = clamp(p, 0, 2);
+  for (let i = 0; i < DONE_STOPS.length - 1; i++) {
+    const [a, ca] = DONE_STOPS[i], [b, cb] = DONE_STOPS[i + 1];
+    if (p <= b) return mix(ca, cb, (p - a) / (b - a));
+  }
+  return DONE_STOPS[DONE_STOPS.length - 1][1];
+}
+const fcache = new Map();
+// mode: 'open' (뒤집기 전, 윗면 반죽) | 'closed' (뒤집은 뒤/완성) | 'sil' (틀 자국)
+function fishSprite(p, mode, fill) {
+  const q = Math.round(clamp(p, 0, 2) * 10) / 10;
+  const k = q + mode + (fill || '');
+  let c = fcache.get(k);
+  if (c) return c;
+  c = document.createElement('canvas'); c.width = FW; c.height = FH;
+  const g = c.getContext('2d');
+  let body = doneColor(q);
+  if (mode === 'closed' && fill === 'cream' && q >= 0.9 && q < 1.8) body = mix(body, '#ffe58a', 0.35);
+  const pal = mode === 'sil'
+    ? { o: '#141218', b: '#1c1a22', s: '#1c1a22', e: '#1c1a22' }
+    : { o: shade(body, 0.55), b: body, s: mode === 'closed' ? shade(body, 0.8) : body, e: mode === 'closed' ? '#201010' : body };
+  for (let y = 0; y < FH; y++) for (let x = 0; x < FW; x++) {
+    const ch = FISH[y][x];
+    if (ch === '.' || !ch) continue;
+    g.fillStyle = pal[ch]; g.fillRect(x, y, 1, 1);
+  }
+  if (mode === 'open') {
+    // 반죽 윗면: 가장자리가 먼저 익는 느낌
+    g.fillStyle = shade(body, 0.9);
+    for (let y = 1; y < FH - 1; y++) for (let x = 1; x < FW - 1; x++) {
+      if (FISH[y][x] === '.' || FISH[y][x] === 'o') continue;
+      const edge = FISH[y - 1][x] === 'o' || FISH[y + 1][x] === 'o' || FISH[y][x - 1] === 'o' || FISH[y][x + 1] === 'o';
+      if (edge) g.fillRect(x, y, 1, 1);
+    }
+    if (fill) {
+      g.fillStyle = fill === 'cream' ? '#ffe070' : '#6a2626';
+      g.fillRect(8, 4, 7, 3); g.fillRect(9, 3, 5, 5);
+      g.fillStyle = fill === 'cream' ? '#fff4b0' : '#8a3a36';
+      g.fillRect(10, 4, 2, 1);
+    }
+  }
+  fcache.set(k, c);
+  return c;
+}
+function drawFish(p, mode, fill, x, y, sc = 1) {
+  ctx.drawImage(fishSprite(p, mode, fill), Math.round(x), Math.round(y), FW * sc, FH * sc);
+}
+
+// ---------------------------------------------------------------- 도트 스프라이트: 손님
+const PERSON = [
+  '.....hhhhhh.....',
+  '...hhhhhhhhhh...',
+  '..hhhhhhhhhhhh..',
+  '..hhffffffffhh..',
+  '..hffffffffffh..',
+  '..ffffffffffff..',
+  '..ffffffffffff..',
+  '..ffffffffffff..',
+  '...ffffffffff...',
+  '....ffffffff....',
+  '......ffff......',
+  '...ccccssccccc..',
+  '..cccccssccccccc',
+  '.ccccccssccccccc',
+  '.ccccccssccccccc',
+  '.ccccccssccccccc',
+  '.fcccccssccccccf',
+  '.fcccccssccccccf',
+  '..ccccsssscccccc',
+  '..cccccccccccccc',
+];
+const PW = 16, PH = 20;
+const HAIRS = ['#2b1d14', '#4a2c18', '#111111', '#7a4a20', '#c9c9c9', '#d8a040'];
+const SKINS = ['#ffd8b0', '#f4c896', '#e8b080', '#ffe0c4'];
+const SHIRTS = ['#d84848', '#4878d8', '#48a868', '#e8c040', '#9858c8', '#e87830', '#38a8b8', '#6a6a7a'];
+const HATS = ['#e84848', '#3868c8', '#f0f0f0', '#40a060', '#f0a030'];
+function makePerson() {
+  const hair = pick(HAIRS), skin = pick(SKINS), shirt = pick(SHIRTS);
+  const hat = Math.random() < 0.45 ? pick(HATS) : null;
+  const scarf = Math.random() < 0.5 ? pick(SHIRTS) : shade(shirt, 0.75);
+  const grid = PERSON.map(r => r.split(''));
+  if (hat) for (let y = 0; y < 3; y++) for (let x = 0; x < PW; x++) if (grid[y][x] === 'h') grid[y][x] = 'a';
+  const pal = { h: hair, f: skin, c: shirt, s: scarf, a: hat };
+  const c = document.createElement('canvas'); c.width = PW + 2; c.height = PH + 2;
+  const g = c.getContext('2d');
+  const filled = (x, y) => x >= 0 && y >= 0 && x < PW && y < PH && grid[y][x] !== '.';
+  g.fillStyle = '#1a1014';
+  for (let y = -1; y <= PH; y++) for (let x = -1; x <= PW; x++) {
+    if (filled(x, y)) continue;
+    if (filled(x - 1, y) || filled(x + 1, y) || filled(x, y - 1) || filled(x, y + 1)) g.fillRect(x + 1, y + 1, 1, 1);
+  }
+  for (let y = 0; y < PH; y++) for (let x = 0; x < PW; x++) {
+    const ch = grid[y][x]; if (ch === '.') continue;
+    g.fillStyle = pal[ch]; g.fillRect(x + 1, y + 1, 1, 1);
+  }
+  if (hat) { // 방울 + 테두리
+    g.fillStyle = '#ffffff'; g.fillRect(7, 0, 2, 1);
+    g.fillStyle = shade(hat, 0.7); g.fillRect(3, 3, 12, 1);
+  }
+  return c;
+}
+
+// ---------------------------------------------------------------- 사운드 (Web Audio 단음 비프)
+let AC = null, muted = false;
+function audioInit() {
+  if (!AC) { try { AC = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { AC = null; } }
+  if (AC && AC.state === 'suspended') AC.resume();
+}
+function beep(freq, dur = 0.06, vol = 0.07) {
+  if (!AC || muted) return;
+  const t = AC.currentTime;
+  const o = AC.createOscillator(), g = AC.createGain();
+  o.type = 'square'; o.frequency.setValueAtTime(freq, t);
+  g.gain.setValueAtTime(vol, t);
+  g.gain.setValueAtTime(vol, t + dur * 0.75);
+  g.gain.linearRampToValueAtTime(0.0001, t + dur);
+  o.connect(g); g.connect(AC.destination);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+
+// ---------------------------------------------------------------- 저장
+const SAVE_KEY = 'bungeoppang_tycoon_save_v1';
+const DEFAULT_SAVE = { day: 1, money: 0, fire: 0, molds: 4, cream: false, total: 0 };
+function loadSave() {
+  try {
+    const s = JSON.parse(localStorage.getItem(SAVE_KEY));
+    if (s && typeof s.day === 'number') return Object.assign({}, DEFAULT_SAVE, s);
+  } catch (e) { /* 무시 */ }
+  return Object.assign({}, DEFAULT_SAVE);
+}
+function writeSave() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch (e) { /* 무시 */ } }
+function hasSave() { try { return !!localStorage.getItem(SAVE_KEY); } catch (e) { return false; } }
+let save = loadSave();
+
+// ---------------------------------------------------------------- 밸런스
+const DAY_LEN = 60;
+const BATTER_COST = 50;
+const PRICE = { red: 300, cream: 500 };
+const BASE_RATE = 1 / 2.6;          // 한 면이 잘 익는 데 2.6초 (p=1), p=2 이면 탐
+const FIRE_COST = [3000, 6000, 10000];
+const FIRE_MAX = 3;
+const CREAM_COST = 5000;
+const moldCost = () => 1500 + (save.molds - 4) * 1000;
+const fireMult = () => 1 + 0.3 * save.fire;
+function difficulty(d) {
+  return {
+    gap: Math.max(0.6, 3.6 - 0.35 * (d - 1)),          // 다음 손님까지 (초)
+    patience: Math.max(5, 15 - 1.1 * (d - 1)),         // 기본 인내심 (초)
+    maxOrder: Math.min(6, 2 + Math.floor((d - 1) / 2)),
+  };
+}
+
+// ---------------------------------------------------------------- 레이아웃
+const GRID_X = 6, GRID_Y = 96, CELL_W = 74, CELL_H = 36, CELL_GX = 78, CELL_GY = 38;
+const KEY_X = 6, KEY_Y = 213, KEY_W = 74, KEY_H = 26, KEY_GX = 78, KEY_GY = 28;
+const cellPos = i => [GRID_X + (i % 3) * CELL_GX, GRID_Y + Math.floor(i / 3) * CELL_GY];
+const keyPos = i => [KEY_X + (i % 3) * KEY_GX, KEY_Y + Math.floor(i / 3) * KEY_GY];
+const TOGGLE = { x: 84, y: 301, w: 72, h: 17 };
+
+// ---------------------------------------------------------------- 상태
+let scene = 'title', sceneT = 0, T = 0;
+let G = null;      // 하루 진행 상태
+let R = null;      // 정산 결과
+let shopMsg = { s: '', t: 0, c: '#fff' }, resetArmed = false;
+const snow = Array.from({ length: 40 }, () => ({ x: rnd(0, W), y: rnd(0, H), v: rnd(8, 22), w: rnd(0, 6) }));
+
+function go(s) { scene = s; sceneT = 0; }
+
+function startDay() {
+  G = {
+    t: DAY_LEN,
+    cells: Array.from({ length: 9 }, () => ({ st: 'empty', pA: 0, pB: 0, fill: 'red' })),
+    stock: { red: 0, cream: 0 },
+    cust: null, nextIn: 1.2, serveT: 0,
+    fill: 'red',
+    st: { sold: 0, rev: 0, tips: 0, cost: 0, raw: 0, burnt: 0, happy: 0, angry: 0, left: 0 },
+    popups: [], press: new Array(9).fill(0), togglePress: 0,
+    banner: { s: '영업 시작!', t: 1.2 },
+  };
+}
+
+function popup(x, y, s, c = '#fff') { G.popups.push({ x, y, s, c, t: 0 }); }
+function cellCenter(i) { const [x, y] = cellPos(i); return [x + CELL_W / 2, y + 6]; }
+
+// ---------------------------------------------------------------- 게임 로직
+function pressCell(i) {
+  if (!G || scene !== 'play') return;
+  G.press[i] = 0.12;
+  const [cx, cy] = cellCenter(i);
+  if (i >= save.molds) { beep(120, 0.08); popup(cx, cy, '잠김', '#aaa'); return; }
+  const c = G.cells[i];
+  switch (c.st) {
+    case 'empty':
+      c.st = 'batter'; c.pA = 0; c.pB = 0; c.ready = false;
+      G.st.cost += BATTER_COST; beep(440, 0.05); break;
+    case 'batter':
+      c.st = 'filled'; c.fill = G.fill; beep(523, 0.05); break;
+    case 'filled':
+      c.st = 'flipped'; c.pB = 0; c.ready = false; beep(659, 0.05);
+      if (c.pA < 1) popup(cx, cy, '앞면 덜 익음', '#ffe070');
+      break;
+    case 'flipped':
+      if (c.pA >= 1 && c.pB >= 1) {
+        G.stock[c.fill]++; popup(cx, cy, '잘 익음!', '#7cff7c'); beep(880, 0.08);
+      } else {
+        G.st.raw++; popup(cx, cy, '덜 익음..', '#ffb060'); beep(196, 0.15);
+      }
+      c.st = 'empty'; break;
+    case 'burnt':
+      G.st.burnt++; c.st = 'empty'; popup(cx, cy, '버림', '#bbb'); beep(300, 0.06); break;
+  }
+}
+
+function toggleFill() {
+  if (!G || scene !== 'play') return;
+  G.togglePress = 0.12;
+  if (!save.cream) { beep(150, 0.08); popup(120, 286, '슈크림은 상점에서!', '#ffe070'); return; }
+  G.fill = G.fill === 'red' ? 'cream' : 'red';
+  beep(G.fill === 'red' ? 600 : 750, 0.05);
+}
+
+function spawnCustomer() {
+  const d = difficulty(save.day);
+  const total = rndi(1, d.maxOrder);
+  let cream = 0;
+  if (save.cream) for (let i = 0; i < total; i++) if (Math.random() < 0.4) cream++;
+  const pat = d.patience + total * 1.6;
+  G.cust = { spr: makePerson(), order: { red: total - cream, cream }, pat, max: pat, x: -40, state: 'enter', happy: false };
+}
+
+function updatePlay(dt) {
+  G.t -= dt;
+  if (G.banner) { G.banner.t -= dt; if (G.banner.t <= 0) G.banner = null; }
+  for (let i = 0; i < 9; i++) G.press[i] = Math.max(0, G.press[i] - dt);
+  G.togglePress = Math.max(0, G.togglePress - dt);
+
+  // 굽기
+  const rate = BASE_RATE * fireMult();
+  for (let i = 0; i < save.molds; i++) {
+    const c = G.cells[i];
+    let key = null;
+    if (c.st === 'batter' || c.st === 'filled') key = 'pA';
+    else if (c.st === 'flipped') key = 'pB';
+    if (!key) continue;
+    c[key] += rate * dt;
+    if (!c.ready && c[key] >= 1) { c.ready = true; if (c.st !== 'batter') beep(1320, 0.025, 0.03); }
+    if (c[key] >= 2) {
+      c.st = 'burnt';
+      const [cx, cy] = cellCenter(i);
+      popup(cx, cy, '탐!', '#ff5050'); beep(140, 0.2);
+    }
+  }
+
+  // 손님
+  const d = difficulty(save.day);
+  const c = G.cust;
+  if (!c) {
+    if (G.t > 4) { G.nextIn -= dt; if (G.nextIn <= 0) spawnCustomer(); }
+  } else if (c.state === 'enter') {
+    c.x += dt * 140;
+    if (c.x >= 8) { c.x = 8; c.state = 'wait'; beep(988, 0.04); }
+  } else if (c.state === 'wait') {
+    c.pat -= dt;
+    G.serveT -= dt;
+    if (G.serveT <= 0) {
+      for (const f of ['red', 'cream']) {
+        if (c.order[f] > 0 && G.stock[f] > 0) {
+          c.order[f]--; G.stock[f]--;
+          G.st.sold++; G.st.rev += PRICE[f];
+          popup(150, 58, '+' + PRICE[f], '#ffd84a'); beep(1047, 0.04);
+          G.serveT = 0.2;
+          break;
+        }
+      }
+    }
+    if (c.order.red + c.order.cream === 0) {
+      const tip = Math.floor(clamp(c.pat / c.max, 0, 1) * 5) * 50;
+      G.st.tips += tip; G.st.happy++;
+      popup(40, 30, tip > 0 ? '팁 +' + tip : '고마워요', '#7cff7c');
+      c.state = 'leave'; c.happy = true; beep(1568, 0.1);
+    } else if (c.pat <= 0) {
+      G.st.angry++;
+      popup(40, 30, '흥!', '#ff5050');
+      c.state = 'leave'; c.happy = false; beep(110, 0.3);
+    }
+  } else if (c.state === 'leave') {
+    c.x -= dt * 140;
+    if (c.x < -44) { G.cust = null; G.nextIn = d.gap * rnd(0.7, 1.3); }
+  }
+
+  updatePopups(dt);
+
+  if (G.t <= 0) {
+    G.t = 0;
+    G.banner = { s: '영업 종료!', t: 99 };
+    if (G.cust && G.cust.state !== 'leave') G.cust.state = 'leave';
+    beep(330, 0.4);
+    go('closing');
+  }
+}
+
+function updatePopups(dt) {
+  for (const p of G.popups) p.t += dt;
+  G.popups = G.popups.filter(p => p.t < 1);
+}
+
+function finishDay() {
+  const s = G.st;
+  s.left = G.stock.red + G.stock.cream;
+  const net = s.rev + s.tips - s.cost;
+  const before = save.money;
+  save.money = Math.max(0, save.money + net);
+  save.total = (save.total || 0) + s.sold;
+  R = { day: save.day, ...s, net, before, after: save.money };
+  save.day++;
+  writeSave();
+  go('result');
+}
+
+function buy(n) {
+  if (n === 4) {
+    if (!resetArmed) { resetArmed = true; shopMsg = { s: '한 번 더 누르면 기록 삭제!', t: 2.5, c: '#ff6060' }; beep(220, 0.1); return; }
+    try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* 무시 */ }
+    save = Object.assign({}, DEFAULT_SAVE);
+    resetArmed = false; beep(110, 0.3);
+    go('title');
+    return;
+  }
+  resetArmed = false;
+  let cost = 0, ok = false, name = '';
+  if (n === 1) { if (save.fire >= FIRE_MAX) return maxed(); cost = FIRE_COST[save.fire]; name = '불 세기 UP'; }
+  if (n === 2) { if (save.molds >= 9) return maxed(); cost = moldCost(); name = '틀 추가'; }
+  if (n === 3) { if (save.cream) return maxed(); cost = CREAM_COST; name = '슈크림 메뉴'; }
+  if (save.money < cost) { shopMsg = { s: '돈이 부족해요...', t: 1.5, c: '#ff8080' }; beep(150, 0.12); return; }
+  save.money -= cost;
+  if (n === 1) save.fire++;
+  if (n === 2) save.molds++;
+  if (n === 3) save.cream = true;
+  ok = true;
+  writeSave();
+  shopMsg = { s: name + ' 완료!', t: 1.5, c: '#7cff7c' };
+  if (ok) beep(1175, 0.1);
+}
+function maxed() { shopMsg = { s: '이미 최고 단계예요', t: 1.5, c: '#ffe070' }; beep(300, 0.06); }
+
+// ---------------------------------------------------------------- 입력
+function anyKey() {
+  if (scene === 'title') { beep(880, 0.08); go('intro'); }
+  else if (scene === 'intro' && sceneT > 0.3) { beep(988, 0.08); startDay(); go('play'); }
+  else if (scene === 'result' && sceneT > 0.8) { beep(880, 0.06); resetArmed = false; shopMsg.t = 0; go('shop'); }
+}
+function nextDay() { beep(988, 0.08); resetArmed = false; go('intro'); }
+
+function onKey(e) {
+  const k = e.key;
+  const digit = /^[0-9]$/.test(k) ? +k : null;
+  if (digit !== null || k === ' ' || k === 'Enter' || k === '*' || k.startsWith('Arrow')) e.preventDefault();
+  if (k === 'm' || k === 'M') { muted = !muted; return; }
+  if (scene === 'play') {
+    if (digit >= 1 && digit <= 9) pressCell(digit - 1);
+    else if (digit === 0 || k === ' ' || k === '*' || k === '#' || k === 'Enter') toggleFill();
+    return;
+  }
+  if (scene === 'shop') {
+    if (digit >= 1 && digit <= 4) buy(digit);
+    else if (digit === 0 || k === 'Enter' || k === ' ') nextDay();
+    return;
+  }
+  if (scene === 'closing') return;
+  anyKey();
+}
+
+function onTap(x, y) {
+  const inside = x >= 0 && y >= 0 && x < W && y < H;
+  if (scene === 'play') {
+    if (!inside) return;
+    for (let i = 0; i < 9; i++) {
+      const [cx, cy] = cellPos(i);
+      if (x >= cx && x < cx + CELL_W && y >= cy && y < cy + CELL_H) return pressCell(i);
+      const [kx, ky] = keyPos(i);
+      if (x >= kx && x < kx + KEY_W && y >= ky && y < ky + KEY_H) return pressCell(i);
+    }
+    if (x >= TOGGLE.x && x < TOGGLE.x + TOGGLE.w && y >= TOGGLE.y - 2 && y < H) toggleFill();
+    return;
+  }
+  if (scene === 'shop') {
+    if (!inside) return;
+    for (let n = 1; n <= 4; n++) {
+      const ry = SHOP_Y + (n - 1) * SHOP_GY;
+      if (y >= ry && y < ry + SHOP_H) return buy(n);
+    }
+    if (y >= 266 && y < 298) nextDay();
+    return;
+  }
+  if (scene === 'closing') return;
+  anyKey();
+}
+
+addEventListener('keydown', e => { if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return; audioInit(); onKey(e); });
+addEventListener('pointerdown', e => {
+  if (e.button !== undefined && e.button > 0) return;
+  e.preventDefault();
+  audioInit();
+  const r = cv.getBoundingClientRect();
+  onTap((e.clientX - r.left) * W / r.width, (e.clientY - r.top) * H / r.height);
+}, { passive: false });
+addEventListener('contextmenu', e => e.preventDefault());
+
+// ---------------------------------------------------------------- 그리기: 공통
+function drawSnow(dt, col = '#ffffff') {
+  for (const f of snow) {
+    f.y += f.v * dt; f.w += dt * 2;
+    if (f.y > H) { f.y = -2; f.x = rnd(0, W); }
+    rect((f.x + Math.sin(f.w) * 3 + W) % W, f.y, f.v > 16 ? 2 : 1, f.v > 16 ? 2 : 1, col);
+  }
+}
+const blink = (period = 0.5) => Math.floor(T / period) % 2 === 0;
+
+// ---------------------------------------------------------------- 그리기: 타이틀
+function drawTitle(dt) {
+  rect(0, 0, W, H, '#1c1838');
+  for (let y = 0; y < 140; y += 4) rect(0, y, W, 2, y % 8 ? '#201c40' : '#1c1838');
+  // 달
+  rect(186, 22, 18, 18, '#fff4c0'); rect(184, 24, 22, 14, '#fff4c0'); rect(192, 26, 4, 4, '#e8dca0');
+  drawSnow(dt);
+  // 포장마차
+  rect(20, 150, 200, 6, '#c03030');
+  for (let x = 20; x < 220; x += 20) rect(x, 156, 10, 10, '#e84848'), rect(x + 10, 156, 10, 10, '#f4f0e0');
+  for (let x = 20; x < 220; x += 10) rect(x + 2, 166, 6, 2, (x / 10) % 2 ? '#f4f0e0' : '#e84848');
+  rect(26, 168, 4, 70, '#6a4028'); rect(210, 168, 4, 70, '#6a4028');
+  rect(16, 228, 208, 40, '#8a5a34'); rect(16, 226, 208, 4, '#c8925a'); rect(16, 266, 208, 2, '#5a3a20');
+  // 큰 붕어빵
+  const bob = Math.round(Math.sin(T * 3) * 2);
+  drawFish(1.1, 'closed', 'red', 72, 180 + bob, 4);
+  for (let i = 0; i < 3; i++) { // 김
+    const yy = 176 - ((T * 14 + i * 9) % 26);
+    rect(92 + i * 26 + Math.round(Math.sin(T * 2 + i) * 2), yy + bob, 2, 4, 'rgba(255,255,255,0.5)');
+  }
+  // 타이틀
+  text('붕어빵', W / 2, 56, '#ffd84a', { size: 16, scale: 2, align: 'center', outline: '#5a2a10' });
+  text('타이쿤', W / 2, 96, '#ffffff', { size: 16, scale: 2, align: 'center', outline: '#5a2a10' });
+  text('~ 겨울 길거리 장사 ~', W / 2, 136, '#a8c0ff', { align: 'center' });
+  if (blink(0.5)) text('아무 키나 누르세요', W / 2, 238, '#ffffff', { align: 'center', shadow: '#3a2010' });
+  if (hasSave()) text(save.day + '일째 이어하기 · ' + won(save.money), W / 2, 276, '#ffd84a', { align: 'center' });
+  else text('처음 시작', W / 2, 276, '#ffd84a', { align: 'center' });
+  text('ⓒ2026 붕어빵상회   M:소리', W / 2, 302, '#6a6890', { align: 'center' });
+}
+
+// ---------------------------------------------------------------- 그리기: 영업 화면
+function drawShopFront() {
+  rect(0, 0, W, 64, '#6b4433');
+  for (let x = 0; x < W; x += 16) rect(x, 0, 1, 64, '#5c3a2c');
+  rect(0, 4, W, 1, '#2a1a14');
+  const cols = ['#ff6b6b', '#ffd84a', '#7bdcff', '#9cff8a'];
+  for (let i = 0; i < 20; i++) {
+    const on = (Math.floor(T * 3) + i) % 4 !== 0;
+    rect(5 + i * 12, 5, 3, 3, on ? cols[i % 4] : '#3a2a22');
+  }
+  box(2, 9, 44, 15, '#2a1a14', '#120a08');
+  text(save.day + '일째', 24, 10, '#ffd84a', { align: 'center' });
+}
+
+function drawCustomer() {
+  const c = G.cust;
+  if (!c) {
+    if (scene === 'play') text('손님 기다리는 중' + '.'.repeat(1 + Math.floor(T * 2) % 3), 64, 34, '#c8a888');
+    return;
+  }
+  const ratio = clamp(c.pat / c.max, 0, 1);
+  const angry = c.state === 'wait' ? ratio < 0.3 : !c.happy;
+  const jit = c.state === 'wait' && ratio < 0.3 ? (Math.floor(T * 20) % 2) : 0;
+  const x = Math.round(c.x) + jit, y = 26;
+  ctx.drawImage(c.spr, x, y, (PW + 2) * 2, (PH + 2) * 2);
+  // 표정
+  const P = (tx, ty, w, h, col) => rect(x + (tx + 1) * 2, y + (ty + 1) * 2, w * 2, h * 2, col);
+  const eye = '#201818', mouth = '#802828';
+  let mood = c.state === 'leave' ? (c.happy ? 'happy' : 'angry') : ratio > 0.6 ? 'happy' : ratio > 0.3 ? 'normal' : 'angry';
+  if (mood === 'happy') {
+    P(4, 5, 2, 1, eye); P(10, 5, 2, 1, eye);
+    P(6, 7, 1, 1, mouth); P(9, 7, 1, 1, mouth); P(7, 8, 2, 1, mouth);
+    P(3, 7, 1, 1, '#f49090'); P(12, 7, 1, 1, '#f49090');
+  } else if (mood === 'normal') {
+    P(5, 5, 1, 1, eye); P(10, 5, 1, 1, eye);
+    P(6, 8, 4, 1, mouth);
+  } else {
+    P(4, 4, 2, 1, eye); P(10, 4, 2, 1, eye);
+    P(5, 5, 1, 1, eye); P(10, 5, 1, 1, eye);
+    P(7, 7, 2, 1, mouth); P(6, 8, 1, 1, mouth); P(9, 8, 1, 1, mouth);
+    P(3, 6, 2, 1, '#ff7070'); P(11, 6, 2, 1, '#ff7070');
+    // 화남 표시
+    const ax = x + 30, ay = y - 2;
+    rect(ax, ay, 2, 6, '#ff3030'); rect(ax + 4, ay, 2, 6, '#ff3030'); rect(ax - 2, ay + 2, 10, 2, '#ff3030');
+  }
+  if (c.state !== 'wait') return;
+
+  // 말풍선
+  const bx = 60, by = 12, bw = 176, bh = 28;
+  const border = ratio < 0.3 && blink(0.15) ? '#e03030' : '#302020';
+  box(bx, by, bw, bh, '#ffffff', border);
+  rect(bx - 4, by + 14, 5, 2, border); rect(bx - 2, by + 12, 3, 2, border); rect(bx - 1, by + 14, 2, 1, '#ffffff');
+  rect(bx, by + 13, 1, 1, '#ffffff');
+  let tx = bx + 6;
+  for (const f of ['red', 'cream']) {
+    const n = c.order[f];
+    if (n <= 0) continue;
+    drawFish(1, 'closed', f, tx, by + 9);
+    tx += 26;
+    tx += text((f === 'red' ? '팥' : '슈크림') + 'x' + n, tx, by + 7, '#302020') + 6;
+  }
+  text('주세요!', bx + bw - 6, by + 7, '#806060', { align: 'right' });
+
+  // 인내심 게이지
+  text('인내심', 62, 43, '#ffe8c8', { shadow: '#2a1a14' });
+  const segs = 10, on = Math.ceil(ratio * segs);
+  const col = ratio > 0.6 ? '#58d858' : ratio > 0.3 ? '#f0c030' : '#f04040';
+  rect(103, 45, segs * 13 + 1, 12, '#1a1010');
+  for (let i = 0; i < segs; i++) rect(104 + i * 13, 46, 12, 10, i < on ? col : '#4a3a3a');
+}
+
+function drawCounter() {
+  rect(0, 64, W, 4, '#d8a068');
+  rect(0, 68, W, 26, '#8a5a34');
+  rect(0, 68, W, 1, '#5a3a20');
+  for (let x = 8; x < W; x += 40) rect(x, 72, 1, 20, '#7a4c2a');
+  text('진열대', 4, 74, '#ffe8c8', { shadow: '#3a2010' });
+  const groups = save.cream ? [['red', 44, '팥', 5], ['cream', 140, '슈', 5]] : [['red', 44, '팥', 10]];
+  for (const [f, gx, label, maxIcons] of groups) {
+    const n = G.stock[f];
+    text(label, gx, 74, f === 'red' ? '#ffb0a0' : '#fff0a0', { shadow: '#3a2010' });
+    const show = Math.min(n, maxIcons);
+    for (let i = 0; i < show; i++) drawFish(1, 'closed', f, gx + 14 + i * 9, 76 + (i % 2) * 2);
+    text('x' + n, gx + 14 + (show > 0 ? (show - 1) * 9 + 26 : 0), 74, '#ffffff', { shadow: '#3a2010' });
+  }
+}
+
+const NEXT_LABEL = { empty: '반죽', batter: '속넣기', filled: '뒤집기', flipped: '꺼내기', burnt: '버리기' };
+
+function drawGrid() {
+  rect(0, 94, W, 116, '#262028');
+  for (let y = 98; y < 210; y += 6) rect(0, y, W, 1, '#2c2530');
+  const fireCols = ['#c03010', '#e85010', '#ff8820', '#ffc040'];
+  for (let i = 0; i < 9; i++) {
+    const [x, y] = cellPos(i);
+    if (i >= save.molds) {
+      box(x, y, CELL_W, CELL_H, '#1e1a22', '#0e0c10');
+      // 자물쇠
+      const lx = x + CELL_W / 2 - 5, ly = y + 8;
+      rect(lx + 2, ly, 6, 2, '#5a5660'); rect(lx + 1, ly + 1, 2, 5, '#5a5660'); rect(lx + 7, ly + 1, 2, 5, '#5a5660');
+      rect(lx, ly + 5, 10, 8, '#7a7680'); rect(lx + 4, ly + 8, 2, 3, '#2a2830');
+      text('잠김', x + CELL_W / 2, y + 22, '#5a5660', { align: 'center' });
+      continue;
+    }
+    const c = G.cells[i];
+    const pressed = G.press[i] > 0;
+    const p = c.st === 'flipped' ? c.pB : c.pA;
+    const ready = (c.st === 'filled' || c.st === 'flipped') && p >= 1 && p < 2;
+    const warn = (c.st === 'batter' || c.st === 'filled' || c.st === 'flipped') && p >= 1.65;
+    let border = pressed ? '#ffffff' : '#141218';
+    if (ready && !warn && blink(0.25)) border = '#58e858';
+    if (warn && blink(0.12)) border = '#ff4040';
+    box(x, y, CELL_W, CELL_H, pressed ? '#5a5664' : '#46424e', border);
+    rect(x + 3, y + 2, CELL_W - 6, 1, '#5a5664');
+    // 불꽃 (불 세기 단계에 따라 색이 밝아짐)
+    for (let k = 0; k < 7; k++) {
+      const fh = 1 + ((Math.floor(T * 12) + k * 3 + i) % 3);
+      rect(x + 6 + k * 10, y + CELL_H - 1 - fh, 3, fh, fireCols[Math.min(3, save.fire)]);
+    }
+    text(i + 1, x + 3, y + 1, '#8a8694');
+    const fx = x + 13, fy = y + 4;
+    drawFish(0, 'sil', null, fx, fy, 2);
+    if (c.st === 'batter' || c.st === 'filled') drawFish(c.pA, 'open', c.st === 'filled' ? c.fill : null, fx, fy, 2);
+    else if (c.st === 'flipped') drawFish(c.pB, 'closed', c.fill, fx, fy, 2);
+    else if (c.st === 'burnt') {
+      drawFish(2, 'closed', c.fill, fx, fy, 2);
+      for (let k = 0; k < 3; k++) {
+        const ph = (T * 18 + k * 7) % 20;
+        rect(fx + 10 + k * 12 + Math.round(Math.sin(T * 4 + k) * 2), fy + 6 - ph, 4, 4, ph > 14 ? '#6a6a6a' : '#9a9a9a');
+      }
+    }
+    // 익힘 막대
+    if (c.st === 'batter' || c.st === 'filled' || c.st === 'flipped') {
+      const bx = x + 8, by = y + 28, bw = 58;
+      rect(bx - 1, by - 1, bw + 2, 5, '#100e12');
+      rect(bx, by, bw / 2, 3, '#8a7a50');
+      rect(bx + bw / 2, by, bw / 2, 3, '#3a9a48');
+      rect(bx + bw - 3, by, 3, 3, '#c03030');
+      const mx = bx + Math.round(clamp(p / 2, 0, 1) * (bw - 2));
+      rect(mx, by - 1, 2, 5, '#ffffff');
+    }
+  }
+}
+
+function drawKeypad() {
+  rect(0, 210, W, 88, '#2e2a38');
+  rect(0, 210, W, 1, '#4a4658');
+  for (let i = 0; i < 9; i++) {
+    const [x, y] = keyPos(i);
+    const pressed = G.press[i] > 0;
+    const locked = i >= save.molds;
+    const c = G.cells[i];
+    const fill = locked ? '#6a6670' : pressed ? '#a8a0b0' : '#e0d8cc';
+    box(x, y + (pressed ? 1 : 0), KEY_W, KEY_H - 1, fill, '#141018');
+    if (!pressed) rect(x + 1, y + KEY_H - 2, KEY_W - 2, 1, '#8a8090');
+    const oy = pressed ? 1 : 0;
+    text(i + 1, x + 8, y + 3 + oy, locked ? '#3a3640' : '#202028', { size: 16 });
+    let label = locked ? '잠김' : NEXT_LABEL[c.st];
+    let lc = '#4a4050';
+    if (!locked) {
+      if (c.st === 'batter') { label = G.fill === 'cream' ? '슈크림' : '팥넣기'; lc = '#8a3030'; }
+      if (c.st === 'burnt') lc = '#c02020';
+      if (c.st === 'flipped' && c.pB >= 1) lc = '#208030';
+      if (c.st === 'filled' && c.pA >= 1) lc = '#208030';
+    }
+    text(label, x + KEY_W - 6, y + 6 + oy, locked ? '#3a3640' : lc, { align: 'right' });
+  }
+}
+
+function drawStatusBar() {
+  rect(0, 298, W, 22, '#120e16');
+  rect(0, 298, W, 1, '#4a4658');
+  text(won(save.money + G.st.rev + G.st.tips - G.st.cost), 4, 303, '#ffd84a');
+  // 속 선택 버튼
+  if (save.cream) {
+    const pr = G.togglePress > 0;
+    box(TOGGLE.x, TOGGLE.y, TOGGLE.w, TOGGLE.h, pr ? '#5a4a30' : '#3a3040', '#8a7a9a');
+    text('0:' + (G.fill === 'red' ? '팥' : '슈크림'), TOGGLE.x + TOGGLE.w / 2, TOGGLE.y + 2, G.fill === 'red' ? '#ffb0a0' : '#fff0a0', { align: 'center' });
+  } else {
+    text('속: 팥', W / 2, 303, '#8a7a9a', { align: 'center' });
+  }
+  const tl = Math.ceil(G.t);
+  const tc = tl <= 10 ? (blink(0.25) ? '#ff5050' : '#ffffff') : '#ffffff';
+  text('남은 ' + tl + '초', W - 4, 303, tc, { align: 'right' });
+}
+
+function drawPopups() {
+  for (const p of G.popups) {
+    if (p.t > 0.65 && Math.floor(p.t * 20) % 2) continue;
+    text(p.s, p.x, p.y - p.t * 16, p.c, { align: 'center', outline: '#101010' });
+  }
+}
+
+function drawBanner(s) {
+  rect(0, 136, W, 32, 'rgba(10,8,14,0.85)');
+  rect(0, 136, W, 1, '#ffd84a'); rect(0, 167, W, 1, '#ffd84a');
+  text(s, W / 2, 140, '#ffd84a', { size: 12, scale: 2, align: 'center', outline: '#3a2010' });
+}
+
+function drawPlay() {
+  drawShopFront();
+  drawCustomer();
+  drawCounter();
+  drawGrid();
+  drawKeypad();
+  drawStatusBar();
+  drawPopups();
+  if (G.banner && (scene === 'closing' || G.banner.t > 0)) drawBanner(G.banner.s);
+}
+
+// ---------------------------------------------------------------- 그리기: 안내/정산/상점
+function panel(title, sub) {
+  rect(0, 0, W, H, '#1c1838');
+  rect(0, 0, W, 30, '#2e2860');
+  rect(0, 30, W, 2, '#ffd84a');
+  text(title, W / 2, 5, '#ffd84a', { size: 16, align: 'center', shadow: '#000' });
+  if (sub) text(sub, W - 4, 9, '#a8c0ff', { align: 'right' });
+}
+
+function drawIntro(dt) {
+  rect(0, 0, W, H, '#1c1838');
+  drawSnow(dt, '#3a3670');
+  text(save.day + '일째', W / 2, 18, '#ffd84a', { size: 16, scale: 2, align: 'center', outline: '#5a2a10' });
+  text('오늘의 장사를 시작합니다', W / 2, 58, '#ffffff', { align: 'center' });
+  box(8, 78, W - 16, 150, '#262050', '#5a54a0');
+  const lines = [
+    ['칸(1~9)을 누를 때마다', '#ffffff'],
+    [' 반죽 → 속넣기 → 뒤집기 → 꺼내기', '#ffd84a'],
+    ['막대의 흰 표시가 초록칸일 때', '#ffffff'],
+    [' 뒤집고, 또 초록칸일 때 꺼내요', '#7cff7c'],
+    ['빨간칸까지 가면 타버려요!', '#ff7070'],
+    [' 탄 건 한 번 더 눌러 버리기', '#ffb0a0'],
+    ['잘 익은 건 진열대 → 자동 판매', '#ffffff'],
+  ];
+  if (save.cream) lines.push(['0키/속 버튼: 팥 ↔ 슈크림', '#fff0a0']);
+  lines.forEach(([s, c], i) => text(s, 16, 84 + i * 17, c));
+  const d = difficulty(save.day);
+  text('손님 간격 ' + d.gap.toFixed(1) + '초 · 최대 ' + d.maxOrder + '개 주문', W / 2, 236, '#a8c0ff', { align: 'center' });
+  text('불 Lv' + save.fire + ' · 틀 ' + save.molds + '개' + (save.cream ? ' · 슈크림' : ''), W / 2, 254, '#a8c0ff', { align: 'center' });
+  if (blink(0.5)) text('아무 키나 누르면 시작', W / 2, 284, '#ffffff', { align: 'center', shadow: '#000' });
+}
+
+function drawResult(dt) {
+  panel(R.day + '일째 정산');
+  const rows = [
+    ['판매', R.sold + '개', '#ffffff'],
+    ['매출', won(R.rev), '#ffffff'],
+    ['팁', '+' + won(R.tips), '#7cff7c'],
+    ['재료비', '-' + won(R.cost), '#ff8080'],
+    ['덜 익음 / 탐', R.raw + '개 / ' + R.burnt + '개', '#ffb060'],
+    ['만족 / 화난 손님', R.happy + '명 / ' + R.angry + '명', '#ffffff'],
+    ['남은 붕어빵', R.left + '개 (버림)', '#a0a0b0'],
+  ];
+  const shown = Math.min(rows.length, Math.floor(sceneT / 0.12));
+  for (let i = 0; i < shown; i++) {
+    const [a, b, c] = rows[i];
+    const y = 42 + i * 20;
+    text(a, 14, y, '#c8c0e0');
+    text(b, W - 14, y, c, { align: 'right' });
+    rect(14, y + 16, W - 28, 1, '#2e2860');
+  }
+  if (sceneT > rows.length * 0.12 + 0.2) {
+    box(8, 186, W - 16, 52, '#262050', '#ffd84a');
+    text('순이익', 18, 194, '#ffd84a');
+    text((R.net >= 0 ? '+' : '') + won(R.net), W - 18, 194, R.net >= 0 ? '#7cff7c' : '#ff6060', { align: 'right' });
+    text('보유 금액', 18, 214, '#ffffff');
+    text(won(R.after), W - 18, 214, '#ffd84a', { align: 'right' });
+    const msg = R.net >= 8000 ? '대박 났어요!' : R.net >= 4000 ? '장사 잘 했어요!' : R.net >= 1000 ? '그럭저럭 괜찮았어요' : '내일은 더 잘해봐요...';
+    text(msg, W / 2, 248, '#a8c0ff', { align: 'center' });
+  }
+  if (sceneT > 0.8 && blink(0.5)) text('아무 키나 누르면 상점으로', W / 2, 284, '#ffffff', { align: 'center' });
+}
+
+const SHOP_Y = 52, SHOP_GY = 50, SHOP_H = 46;
+function drawShop(dt) {
+  panel('상점', won(save.money));
+  const items = [
+    { n: 1, name: '불 세기', lv: 'Lv ' + save.fire + '/' + FIRE_MAX, desc: '굽는 속도 +30%', cost: save.fire >= FIRE_MAX ? null : FIRE_COST[save.fire] },
+    { n: 2, name: '붕어빵 틀', lv: save.molds + '/9개', desc: '굽는 칸 1개 추가', cost: save.molds >= 9 ? null : moldCost() },
+    { n: 3, name: '슈크림 맛', lv: save.cream ? '보유' : '미보유', desc: '한 개 ' + PRICE.cream + '원 새 메뉴', cost: save.cream ? null : CREAM_COST },
+    { n: 4, name: '처음부터', lv: '', desc: resetArmed ? '한 번 더 누르면 삭제!' : '기록을 지우고 새로 시작', cost: -1 },
+  ];
+  for (const it of items) {
+    const y = SHOP_Y + (it.n - 1) * SHOP_GY;
+    const afford = it.cost !== null && it.cost >= 0 && save.money >= it.cost;
+    box(6, y, W - 12, SHOP_H, it.n === 4 ? '#2a1830' : '#262050', it.n === 4 && resetArmed ? '#ff4040' : '#5a54a0');
+    box(12, y + 6, 18, 18, '#e0d8cc', '#141018');
+    text(it.n, 21, y + 7, '#202028', { align: 'center' });
+    text(it.name, 36, y + 6, '#ffffff');
+    if (it.lv) text(it.lv, 36 + textW(it.name) + 4, y + 6, '#a8c0ff');
+    text(it.desc, 36, y + 25, it.n === 4 && resetArmed ? '#ff6060' : '#c8c0e0');
+    if (it.cost === null) text(it.n === 3 ? '구매함' : '최고', W - 14, y + 6, '#7cff7c', { align: 'right' });
+    else if (it.cost >= 0) text(won(it.cost), W - 14, y + 6, afford ? '#ffd84a' : '#806870', { align: 'right' });
+  }
+  if (shopMsg.t > 0) { shopMsg.t -= dt; text(shopMsg.s, W / 2, 252, shopMsg.c, { align: 'center', outline: '#000' }); }
+  const pr = blink(0.5);
+  box(30, 268, W - 60, 28, pr ? '#ffd84a' : '#e8c040', '#5a2a10');
+  text('0: ' + save.day + '일째 장사하기', W / 2, 275, '#3a2010', { align: 'center' });
+  text('1~4: 구매   0/확인: 다음 날', W / 2, 302, '#6a6890', { align: 'center' });
+}
+
+// ---------------------------------------------------------------- 메인 루프
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
+  last = now; T += dt; sceneT += dt;
+  if (scene === 'play') updatePlay(dt);
+  else if (scene === 'closing') {
+    if (G.banner) G.banner.t = 99;
+    const c = G.cust;
+    if (c) { c.x -= dt * 140; if (c.x < -44) G.cust = null; }
+    updatePopups(dt);
+    if (sceneT > 1.8) finishDay();
+  }
+  ctx.imageSmoothingEnabled = false;
+  if (scene === 'title') drawTitle(dt);
+  else if (scene === 'intro') drawIntro(dt);
+  else if (scene === 'play' || scene === 'closing') drawPlay();
+  else if (scene === 'result') drawResult(dt);
+  else if (scene === 'shop') drawShop(dt);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
