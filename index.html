@@ -264,12 +264,18 @@ if (!canVibrate) {
   iosHaptic.appendChild(sw);
   document.body.appendChild(iosHaptic);
 }
+// 삼성 인터넷 등 일부 브라우저는 손가락을 '뗄 때'(touchend)만 진동을 허용하므로
+// 누를 때 요청해 두고, 손을 떼는 순간 실제로 진동시킨다.
+let pendingHaptic = 0;
 function haptic(ms = 35) {
   if (!touchInput) return;
-  try {
-    if (canVibrate) navigator.vibrate(ms);
-    else if (iosHaptic) iosHaptic.click();
-  } catch (e) { /* 지원 안 하면 무시 */ }
+  if (canVibrate) { pendingHaptic = Math.max(pendingHaptic, ms); return; }
+  try { if (iosHaptic) iosHaptic.click(); } catch (e) { /* 무시 */ }
+}
+function flushHaptic() {
+  if (!pendingHaptic) return;
+  const ms = pendingHaptic; pendingHaptic = 0;
+  try { navigator.vibrate(ms); } catch (e) { /* 무시 */ }
 }
 
 // ---------------------------------------------------------------- 저장
@@ -563,8 +569,9 @@ addEventListener('pointerdown', e => {
   const r = cv.getBoundingClientRect();
   onTap((e.clientX - r.left) * W / r.width, (e.clientY - r.top) * H / r.height);
 }, { passive: false });
-addEventListener('pointerup', audioInit);
-addEventListener('touchend', audioInit);
+addEventListener('pointerup', () => { audioInit(); flushHaptic(); });
+addEventListener('touchend', () => { audioInit(); flushHaptic(); });
+addEventListener('pointercancel', flushHaptic);
 addEventListener('contextmenu', e => e.preventDefault());
 
 // ---------------------------------------------------------------- 그리기: 공통
